@@ -19,4 +19,3 @@ tokenizers == 0.12.1
 torch == 1.10.0
 tqdm == 4.49.0
 transformers == 4.21.3
-wandb == 0.13.3
