@@ -17,45 +17,26 @@ GPUS_PER_NODE = 10 #8
 
 SETUP_RETRY_COUNT = 3
 
-# fake MPI for single-GPU
-class MPI:
-    COMM_WORLD = None
-    def Get_rank(self): return 0
-    def Get_size(self): return 1
-MPI = MPI()
-
 def setup_dist():
-    """
-    Setup a distributed process group.
-    """
-    if dist.is_initialized():
-        return
-
-    comm = MPI.COMM_WORLD
-    backend = "gloo" if not th.cuda.is_available() else "nccl"
-
-    if backend == "gloo":
-        hostname = "localhost"
-    else:
-        hostname = socket.gethostbyname(socket.getfqdn())
-    os.environ["MASTER_ADDR"] = comm.bcast(hostname, root=0)
-    os.environ["RANK"] = str(comm.rank)
-    os.environ["WORLD_SIZE"] = str(comm.size)
-
-
-    port = comm.bcast(_find_free_port(), root=0)
-    os.environ["MASTER_PORT"] = str(port)
-    dist.init_process_group(backend=backend, init_method="env://")
-
+    return
 
 def dev():
-    """
-    Get the device to use for torch.distributed.
-    """
-    if th.cuda.is_available():
-        return th.device(f"cuda:{MPI.COMM_WORLD.Get_rank() % GPUS_PER_NODE}")
-    return th.device("cpu")
+    return "cuda"
 
+def get_rank():
+    return 0
+
+def get_world_size():
+    return 1
+
+def is_master():
+    return True
+
+def barrier():
+    pass
+
+def all_reduce(tensor):
+    return tensor
 
 def load_state_dict(path, **kwargs):
     """
