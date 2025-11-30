@@ -6,7 +6,6 @@ import json, os
 import pathlib
 import pprint
 import sys
-import wandb
 from transformers import set_seed
 import os
 
@@ -70,16 +69,6 @@ def main():
     with open(f"{args.checkpoint_path}/training_args.json", "w") as f:
         json.dump(args.__dict__, f, indent=2)
 
-    if args.debug:
-        wandb.init(mode="disabled")
-    else:
-        wandb.init(
-            project=os.getenv("WANDB_PROJECT", "minimial-text-diffusion"),
-            name=args.checkpoint_path + make_wandb_name_from_args(args),
-            notes=args.notes,
-        )
-        wandb.config.update(args.__dict__, allow_val_change=True)
-
     logger.log("training...")
     TrainLoop(
         model=model,
@@ -103,13 +92,6 @@ def main():
         eval_interval=args.eval_interval,
     ).run_loop()
 
-
-def make_wandb_name_from_args(args):
-    keys_to_add = ["batch_size", "lr", "num_heads", "lr_anneal_steps", "config_name", "seed", "in_channel"]
-    name = ""
-    for key in keys_to_add:
-        name += f"{key}={getattr(args, key)}_"
-    return name
 
 if __name__ == "__main__":
     main()
