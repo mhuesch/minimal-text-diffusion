@@ -7,7 +7,7 @@ import os
 import socket
 
 import blobfile as bf
-from mpi4py import MPI
+# from mpi4py import MPI  # disabled for single-GPU
 import torch as th
 import torch.distributed as dist
 
@@ -17,6 +17,12 @@ GPUS_PER_NODE = 10 #8
 
 SETUP_RETRY_COUNT = 3
 
+# fake MPI for single-GPU
+class MPI:
+    COMM_WORLD = None
+    def Get_rank(self): return 0
+    def Get_size(self): return 1
+MPI = MPI()
 
 def setup_dist():
     """
