@@ -1,7 +1,7 @@
 from transformers import AutoConfig
 
 # from transformers import BertEncoder
-from transformers.models.bert.modeling_bert import BertEncoder
+from transformers.models.bert.modeling_bert import BertConfig, BertEncoder
 import torch
 
 import torch as th
@@ -92,7 +92,9 @@ class TransformerNetModel(nn.Module):
             del temp_bert.pooler
             self.input_transformers = temp_bert.encoder
         else:
-            self.input_transformers = BertEncoder(self.config)
+            bert_config = BertConfig.from_pretrained("bert-base-uncased")
+            bert_config._attn_implementation = "eager"   # <--- THIS LINE SAVES YOUR LIFE
+            self.input_transformers = BertEncoder(bert_config)
 
     def build_input_output_projections(self):
         if self.use_pretrained_embeddings:
