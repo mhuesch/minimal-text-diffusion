@@ -7,7 +7,6 @@ import sys
 from typing import List
 import numpy as np
 import torch as th
-import torch.distributed as dist
 from transformers import set_seed
 from functools import partial
 from src.utils import dist_util, logger

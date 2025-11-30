@@ -5,7 +5,6 @@ import os
 import blobfile as bf
 import numpy as np
 import torch as th
-import torch.distributed as dist
 from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from tqdm import tqdm
@@ -77,7 +76,10 @@ class TrainLoop:
 
         self.step = 0
         self.resume_step = 0
-        self.global_batch = self.batch_size * dist.get_world_size()
+        # Force single-GPU mode forever
+        self.global_batch = self.batch_size
+        self.num_processes = 1
+        self.batch_size = self.batch_size  # already is
 
         self.model_params = list(self.model.parameters())
         self.master_params = self.model_params
@@ -140,7 +142,6 @@ class TrainLoop:
                     )
                 )
 
-        dist_util.sync_params(self.model.parameters())
 
     def _load_ema_parameters(self, rate):
         ema_params = copy.deepcopy(self.master_params)
@@ -155,7 +156,6 @@ class TrainLoop:
                 )
                 ema_params = self._state_dict_to_master_params(state_dict)
 
-        dist_util.sync_params(ema_params)
         return ema_params
 
     def _load_optimizer_state(self):

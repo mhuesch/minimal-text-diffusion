@@ -9,7 +9,6 @@ import socket
 import blobfile as bf
 # from mpi4py import MPI  # disabled for single-GPU
 import torch as th
-import torch.distributed as dist
 
 # Change this to reflect your cluster layout.
 # The GPU for a given rank is (rank % GPUS_PER_NODE).
@@ -49,15 +48,6 @@ def load_state_dict(path, **kwargs):
         data = None
     data = MPI.COMM_WORLD.bcast(data)
     return th.load(io.BytesIO(data), **kwargs)
-
-
-def sync_params(params):
-    """
-    Synchronize a sequence of Tensors across ranks from rank 0.
-    """
-    for p in params:
-        with th.no_grad():
-            dist.broadcast(p, 0)
 
 
 def _find_free_port():
