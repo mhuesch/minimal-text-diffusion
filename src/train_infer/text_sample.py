@@ -106,7 +106,8 @@ def main():
             seq = seq.unsqueeze(0)
         # now seq is always [seq_len] or [batch, seq_len]
         for s in seq:
-            decoded = tokenizer.decode(s.tolist(), skip_special_tokens=True).strip()
+            tokens = s.clamp(min=0).long().tolist()   # force long + non-negative
+            decoded = tokenizer.decode(tokens, skip_special_tokens=True).strip()
             print(decoded)
             decoded_sentences.append(decoded)
 
