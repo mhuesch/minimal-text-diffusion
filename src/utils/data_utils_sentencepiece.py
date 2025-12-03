@@ -109,8 +109,8 @@ class TextDataset(Dataset):
 
         for i in range(num_elems):
             toks = batch[i]["input_ids"]
-            length = len(toks)
-            tokens[i, :length] = torch.LongTensor(toks)
+            length = min(len(toks), max_token_len)  # Truncate if longer than max_token_len
+            tokens[i, :length] = torch.LongTensor(toks[:max_token_len])  # Truncate toks to max_token_len
             tokens_mask[i, :length] = 1
             if has_labels:
                 labels[i] = batch[i]["label"]
