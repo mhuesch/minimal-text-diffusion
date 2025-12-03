@@ -147,6 +147,26 @@ def main():
     # (which may have drifted during training)
     with th.no_grad():
         logits = model.get_logits(x_t)  # bsz, seqlen, vocab
+        
+        # Debug: Check logits distribution
+        logger.log(f"Logits shape: {logits.shape}")
+        logger.log(f"Logits stats - min: {logits.min().item():.2f}, max: {logits.max().item():.2f}, mean: {logits.mean().item():.2f}")
+        
+        # Check what token has highest probability on average
+        probs = th.softmax(logits, dim=-1)  # [batch, seq_len, vocab]
+        avg_probs = probs.mean(dim=(0, 1))  # [vocab]
+        top_tokens = th.topk(avg_probs, k=10)
+        logger.log(f"Top 10 most probable tokens (avg across all positions):")
+        for i, (prob, token_id) in enumerate(zip(top_tokens.values, top_tokens.indices)):
+            token_str = tokenizer.decode([token_id.item()], skip_special_tokens=False)
+            logger.log(f"  {i+1}. Token {token_id.item()}: '{token_str}' (prob={prob.item():.4f})")
+        
+        # Check first sample's logits
+        sample_0_logits = logits[0]  # [seq_len, vocab]
+        sample_0_probs = th.softmax(sample_0_logits, dim=-1)
+        sample_0_max_probs, sample_0_pred_tokens = th.max(sample_0_probs, dim=-1)
+        logger.log(f"Sample 0 - First 10 positions: max_prob={sample_0_max_probs[:10].tolist()}, predicted_tokens={sample_0_pred_tokens[:10].tolist()}")
+        
         # Use argmax to get the most likely token for each position
         token_ids = th.argmax(logits, dim=-1)  # [batch, seq_len]
     
