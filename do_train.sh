@@ -2,6 +2,7 @@ source env/bin/activate
 
 export PYTHONPATH="$(pwd)/src:$PYTHONPATH"
 
+# coverage run --append --source=src --omit="*/__init__.py" src/train_infer/train.py \
 python src/train_infer/train.py \
   --train_txt_path data/simple-train.txt \
   --val_txt_path data/simple-test.txt \
