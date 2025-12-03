@@ -82,11 +82,11 @@ def main():
         )
 
 
-        gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        all_samples.extend([sample.cpu().numpy() for sample in gathered_samples])
+        # Keep on GPU for potential reuse
+        generated = sample.detach()  # stays on GPU
+        all_samples.extend(generated.cpu().numpy())
 
-        logger.log(f"created {len(all_samples) * args.batch_size} samples")
+        logger.log(f"created {len(all_samples)} samples")
 
     arr = np.concatenate(all_samples, axis=0)
     arr = arr[: args.num_samples * args.mbr_sample]
@@ -98,11 +98,18 @@ def main():
 
     decoded_sentences = []
 
-    for seq in cands.indices:
-        decoded_sentence = tokenizer.decode(seq.squeeze(1).tolist())
-        decoded_sentences.append(decoded_sentence)
+    # Robust single-GPU decoding — works whether shape is [B, L] or [B, 1, L]
+    for seq in sample:
+        if seq.dim() == 3:           # [batch, 1, seq_len] — old format
+            seq = seq.squeeze(1)
+        elif seq.dim() == 1:         # single sequence
+            seq = seq.unsqueeze(0)
+        # now seq is always [seq_len] or [batch, seq_len]
+        for s in seq:
+            decoded = tokenizer.decode(s.tolist(), skip_special_tokens=True).strip()
+            print(decoded)
+            decoded_sentences.append(decoded)
 
-    dist.barrier()
     logger.log("sampling complete")
 
     write_outputs(args=args, sentences=decoded_sentences)
