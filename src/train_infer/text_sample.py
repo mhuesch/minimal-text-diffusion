@@ -98,18 +98,15 @@ def main():
 
     decoded_sentences = []
 
-    # Robust single-GPU decoding — works whether shape is [B, L] or [B, 1, L]
-    for seq in sample:
-        if seq.dim() == 3:           # [batch, 1, seq_len] — old format
-            seq = seq.squeeze(1)
-        elif seq.dim() == 1:         # single sequence
-            seq = seq.unsqueeze(0)
-        # now seq is always [seq_len] or [batch, seq_len]
-        for s in seq:
-            tokens = s.clamp(min=0).long().tolist()   # force long + non-negative
-            decoded = tokenizer.decode(tokens, skip_special_tokens=True).strip()
-            print(decoded)
-            decoded_sentences.append(decoded)
+    # Decode from token IDs (cands.indices) instead of continuous embeddings
+    # cands.indices has shape [batch, seq_len, 1], so we squeeze the last dimension
+    token_ids = cands.indices.squeeze(-1)  # [batch, seq_len]
+    
+    for seq in token_ids:
+        tokens = seq.cpu().tolist()
+        decoded = tokenizer.decode(tokens, skip_special_tokens=True).strip()
+        print(decoded)
+        decoded_sentences.append(decoded)
 
     logger.log("sampling complete")
 
