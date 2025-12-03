@@ -46,6 +46,7 @@ def main():
     logger.info(f"Init pretrained = {args.init_pretrained}")
     logger.info(f"Freeze embeddings = {args.freeze_embeddings}")
     logger.info(f"Use pretrained embeddings = {args.use_pretrained_embeddings}")
+    logger.info(f"Use bert tokenizer (from training) = {args.use_bert_tokenizer}")
     
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
@@ -53,7 +54,22 @@ def main():
     model.load_state_dict(dist_util.load_state_dict(args.model_name_or_path, map_location="cpu"))
     model.eval()
 
-    tokenizer = create_tokenizer(return_pretokenized=args.use_pretrained_embeddings, path=f"data/{args.dataset}/")
+    # Determine which tokenizer to use based on training args
+    # If model uses pretrained embeddings (BERT), we should use BERT tokenizer
+    # But respect the training args if they specified otherwise
+    use_bert_tok = args.use_pretrained_embeddings and (args.use_bert_tokenizer == "yes" or args.use_bert_tokenizer == True)
+    if hasattr(args, 'use_bert_tokenizer') and isinstance(args.use_bert_tokenizer, str):
+        use_bert_tok = args.use_bert_tokenizer.lower() in ["yes", "true", "1"]
+    
+    logger.info(f"Using BERT tokenizer: {use_bert_tok}")
+    tokenizer = create_tokenizer(return_pretokenized=use_bert_tok, path=f"data/{args.dataset}/")
+    
+    # Verify vocab size matches
+    model_vocab_size = model.word_embedding.weight.shape[0]
+    tokenizer_vocab_size = getattr(tokenizer, 'vocab_size', len(tokenizer) if hasattr(tokenizer, '__len__') else None)
+    logger.info(f"Model vocab size: {model_vocab_size}, Tokenizer vocab size: {tokenizer_vocab_size}")
+    if tokenizer_vocab_size and model_vocab_size != tokenizer_vocab_size:
+        logger.warning(f"WARNING: Vocab size mismatch! This may cause decoding issues.")
     
     pytorch_total_params = sum(p.numel() for p in model.parameters())
     logger.log(f"the parameter count is {pytorch_total_params}")
@@ -112,34 +128,108 @@ def main():
 
         # Keep on GPU for potential reuse
         generated = sample.detach()  # stays on GPU
-        all_samples.extend(generated.cpu().numpy())
+        # Append the batch as a whole array, don't extend (which would flatten)
+        all_samples.append(generated.cpu().numpy())
 
-        logger.log(f"created {len(all_samples)} samples")
+        logger.log(f"created {len(all_samples) * args.batch_size} total samples so far")
 
+    # Concatenate all batches along the batch dimension
     arr = np.concatenate(all_samples, axis=0)
-    arr = arr[: args.num_samples * args.mbr_sample]
+    num_to_keep = args.num_samples * args.mbr_sample
+    arr = arr[:num_to_keep]
+    
+    logger.log(f"Total samples collected: {len(all_samples)}, keeping: {num_to_keep}, arr shape: {arr.shape}")
 
     x_t = th.tensor(arr).cuda()
 
-    logits = model.get_logits(x_t)  # bsz, seqlen, vocab
-    cands = th.topk(logits, k=1, dim=-1)
-
-    decoded_sentences = []
-
-    # Decode from token IDs (cands.indices) instead of continuous embeddings
-    # cands.indices has shape [batch, seq_len, 1], so we squeeze the last dimension
-    token_ids = cands.indices.squeeze(-1)  # [batch, seq_len]
+    # Use logits to get token IDs - the model was trained to predict via lm_head,
+    # so this should be more accurate than direct rounding to word_embedding
+    # (which may have drifted during training)
+    with th.no_grad():
+        logits = model.get_logits(x_t)  # bsz, seqlen, vocab
+        # Use argmax to get the most likely token for each position
+        token_ids = th.argmax(logits, dim=-1)  # [batch, seq_len]
     
-    for seq in token_ids:
-        tokens = seq.cpu().tolist()
-        decoded = tokenizer.decode(tokens, skip_special_tokens=True).strip()
-        print(decoded)
-        decoded_sentences.append(decoded)
-
+    decoded_sentences = []
+    
+    logger.log(f"token_ids shape after squeeze: {token_ids.shape}")
+    
+    # Ensure token_ids is 2D: [batch, seq_len]
+    if token_ids.dim() == 1:
+        token_ids = token_ids.unsqueeze(0)
+    
+    # Clamp token IDs to valid range
+    vocab_size = getattr(tokenizer, 'vocab_size', len(tokenizer) if hasattr(tokenizer, '__len__') else 30522)
+    token_ids = th.clamp(token_ids, 0, vocab_size - 1)
+    
     logger.log("sampling complete")
+    logger.log(f"Decoding {token_ids.shape[0]} samples")
+    logger.log("\nFINAL GENERATED TEXT:\n" + "="*80)
+    
+    # Get special token IDs for debugging
+    pad_id = tokenizer.pad_token_id if hasattr(tokenizer, 'pad_token_id') and tokenizer.pad_token_id is not None else None
+    cls_id = tokenizer.cls_token_id if hasattr(tokenizer, 'cls_token_id') and tokenizer.cls_token_id is not None else None
+    sep_id = tokenizer.sep_token_id if hasattr(tokenizer, 'sep_token_id') and tokenizer.sep_token_id is not None else None
+    
+    for i in range(token_ids.shape[0]):
+        tokens = token_ids[i].cpu().tolist()  # Get token IDs as list of integers
+        
+        # Debug first sample
+        if i == 0:
+            logger.log(f"Sample 0 - First 20 token IDs: {tokens[:20]}")
+            logger.log(f"Sample 0 - Unique tokens (first 50): {list(set(tokens[:50]))}")
+            if pad_id is not None:
+                pad_count = sum(1 for t in tokens if t == pad_id)
+                logger.log(f"Sample 0 - [PAD] count: {pad_count}/{len(tokens)}")
+            if cls_id is not None:
+                cls_count = sum(1 for t in tokens if t == cls_id)
+                logger.log(f"Sample 0 - [CLS] count: {cls_count}/{len(tokens)}")
+            if sep_id is not None:
+                sep_count = sum(1 for t in tokens if t == sep_id)
+                logger.log(f"Sample 0 - [SEP] count: {sep_count}/{len(tokens)}")
+        
+        # Try decoding with skip_special_tokens=True
+        text = tokenizer.decode(tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        
+        # If empty, try without skipping special tokens
+        if not text.strip():
+            text_with_special = tokenizer.decode(tokens, skip_special_tokens=False, clean_up_tokenization_spaces=True)
+            logger.log(f"Sample {i} decoded to empty with skip_special_tokens=True")
+            logger.log(f"  With special tokens: {text_with_special[:200]}")
+            # Use the version with special tokens but clean it up
+            text = text_with_special.strip()
+            # Remove common special token strings
+            text = text.replace('[PAD]', '').replace('[CLS]', '').replace('[SEP]', '').replace('[UNK]', '').strip()
+            # Also try removing if they appear as actual tokens
+            if pad_id is not None:
+                tokens = [t for t in tokens if t != pad_id]
+            if cls_id is not None:
+                tokens = [t for t in tokens if t != cls_id]
+            if sep_id is not None:
+                tokens = [t for t in tokens if t != sep_id]
+            # Re-decode if we filtered tokens
+            if tokens:
+                text = tokenizer.decode(tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True).strip()
+        
+        if not text.strip():
+            logger.log(f"WARNING: Sample {i} is still empty after all attempts!")
+        
+        print(f"{i:2d}: {text[:200] if text else '(EMPTY)'}")
+        decoded_sentences.append(text)
 
-    write_outputs(args=args, sentences=decoded_sentences)
-
+    # Save to file using the original write_outputs function format
+    model_dir = os.path.split(args.model_name_or_path)[0]
+    model_base_name = os.path.split(args.model_name_or_path)[1]
+    output_file_basepath = os.path.join(
+        model_dir,
+        f"{model_base_name}.samples_{len(decoded_sentences)}.steps-{args.diffusion_steps}.clamp-{args.clamp}",
+    ) + ".txt"
+    
+    with open(output_file_basepath, "w") as text_fout:
+        for generated_sentence in decoded_sentences:
+            text_fout.write(generated_sentence + "\n")
+    
+    logger.log(f"written the decoded output to {output_file_basepath}")
 
 def load_embeddings(checkpoint_path, tokenizer, emb_dim):
     embeddings = th.nn.Embedding(tokenizer.vocab_size, emb_dim)
@@ -150,24 +240,6 @@ def load_embeddings(checkpoint_path, tokenizer, emb_dim):
 def read_training_args(config_path):
     with open(config_path, "r") as f:
         return json.load(f)
-
-
-def write_outputs(args: dict, sentences: List[str]) -> None:
-
-    model_dir = os.path.split(args.model_name_or_path)[0]
-    model_base_name = os.path.split(args.model_name_or_path)[1]
-    
-    num_samples = len(sentences)
-    output_file_basepath = os.path.join(
-        model_dir,
-        f"{model_base_name}.samples_{num_samples}.steps-{args.diffusion_steps}.clamp-{args.clamp}",
-    ) + ".txt"
-    with open(output_file_basepath, "w") as text_fout:
-        for generated_sentence in sentences:
-            text_fout.write(generated_sentence + "\n")
-
-        print(f"written the decoded output to {output_file_basepath}")
-
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,8 @@ python src/train_infer/train.py \
   --batch_size 32 \
   --modality text \
   --training_mode diffusion-lm \
-  --checkpoint_path ./checkpoints
+  --checkpoint_path ./checkpoints \
+  --use_bert_tokenizer True
 
 #  --train_txt_path data/simple-train.txt \
 #  --val_txt_path data/simple-test.txt \
