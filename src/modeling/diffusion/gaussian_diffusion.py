@@ -605,7 +605,7 @@ class GaussianDiffusion:
 
                 for j in range(num_samples_to_show):
                     ids = cands.indices[j].squeeze(1).tolist()
-                    improved_sent = " ".join([tokenizer.decode(ids, skip_special_tokens=True)])
+                    improved_sent = tokenizer.decode(ids, skip_special_tokens=True)  # decode already returns a string
                     prevs[j].append(f"[step {i}] " + improved_sent)
                     pprint_sentences(
                         sentences=prevs[j],

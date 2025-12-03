@@ -13,6 +13,7 @@ from src.utils.args_utils import *
 from train_infer.factory_methods import create_model_and_diffusion
 from src.utils.args_utils import create_argparser, args_to_dict, model_and_diffusion_defaults
 from src.utils.custom_tokenizer import create_tokenizer
+from functools import partial
 
 
 
@@ -65,6 +66,33 @@ def main():
 
     logger.log("sampling...")
     logger.log(f"Clamping is set to {args.clamp}")
+    
+    # Create a denoised function that projects embeddings back to valid token embeddings
+    # This prevents embeddings from drifting away during sampling
+    def denoised_fn_round(text_emb, t):
+        """Project continuous embeddings to nearest valid token embeddings."""
+        word_emb = model.word_embedding.weight  # [vocab_size, emb_dim]
+        old_shape = text_emb.shape
+        old_device = text_emb.device
+        
+        # Flatten for efficient computation
+        text_emb_flat = text_emb.reshape(-1, text_emb.size(-1))  # [bsz*seqlen, emb_dim]
+        
+        # Efficient L2 distance computation: ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a*b
+        emb_norm = (word_emb ** 2).sum(-1).view(-1, 1)  # [vocab_size, 1]
+        text_emb_t = text_emb_flat.transpose(0, 1)  # [emb_dim, bsz*seqlen]
+        arr_norm = (text_emb_flat ** 2).sum(-1).view(-1, 1)  # [bsz*seqlen, 1]
+        dist = emb_norm + arr_norm.transpose(0, 1) - 2.0 * th.mm(word_emb, text_emb_t)  # [vocab_size, bsz*seqlen]
+        dist = th.clamp(dist, 0.0, float('inf'))
+        
+        # Find nearest token for each embedding
+        topk_out = th.topk(-dist, k=1, dim=0)  # [1, bsz*seqlen]
+        rounded_tokens = topk_out.indices[0]  # [bsz*seqlen]
+        
+        # Get the actual token embeddings
+        new_embeds = model.word_embedding(rounded_tokens).view(old_shape).to(old_device)
+        return new_embeds
+    
     all_samples = []
     while len(all_samples) * args.batch_size < args.num_samples:
         model_kwargs = {}
@@ -73,7 +101,7 @@ def main():
             model,
             sample_shape,
             clip_denoised=args.clip_denoised,
-            denoised_fn=None,
+            denoised_fn=denoised_fn_round,  # Always use rounding to prevent embedding drift
             model_kwargs=model_kwargs,
             top_p=args.top_p,
             progress=True,
