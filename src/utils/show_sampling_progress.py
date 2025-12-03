@@ -9,7 +9,7 @@ def pprint_sentences(sentences: List[str], banner: str = "", sep: str = ""):
     print()
     print(f"\033[1m{'=' * 20} {banner} {'=' * 20}\033[0m")
     for i, sentence in enumerate(sentences):
-        sentence_color = list_of_colors_from_red_to_blue[i]
+        sentence_color = list_of_colors_from_red_to_blue[i % len(list_of_colors_from_red_to_blue)]
         if i == len(sentences) - 1:
             print(f"\033[38;5;{sentence_color}{sentence}\033[0m")
         else:
